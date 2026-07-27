@@ -52,9 +52,9 @@ step "2/4 Caveman (output compression)"
 if claude skills list 2>/dev/null | grep -qi caveman; then
   ok "already installed"
 else
-  claude skills add github:JuliusBrussee/caveman >/dev/null 2>&1 \
+  git clone https://github.com/JuliusBrussee/caveman ~/.claude/skills/caveman >/dev/null 2>&1 \
     && ok "installed" \
-    || warn "install failed — run manually: claude skills add github:JuliusBrussee/caveman"
+    || warn "install failed — run manually: git clone https://github.com/JuliusBrussee/caveman ~/.claude/skills/caveman"
 fi
 
 # --- layer 3: mini-mcp --------------------------------------------------------
