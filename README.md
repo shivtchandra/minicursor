@@ -1,27 +1,37 @@
-# mini — a 4-layer token economy stack for AI coding agents
+# mini — a 4-layer token-economy stack for AI coding agents
 
-> Not one tool. Four layers that each fix a different kind of waste —
-> because rules alone don't work. A real session audit proved it: told not
-> to read whole files, the model read them anyway. Told not to screenshot
-> every fix, it screenshotted anyway. Rules are suggestions. This is
-> infrastructure plus the two rules that infrastructure can't replace.
+> Tooling + rules to remove waste in agent coding sessions: input bloat, noisy output, unnecessary reads, and reflex verification.
 
-## The 4 layers
+mini is a compact stack that combines structural proxies, compression, a small set of MCP tools, and a short, pragmatic ruleset that together reduce cost and noise when models interact with codebases.
 
-```
-Headroom  →  compresses everything the model READS   (proxy, automatic)
-Caveman   →  compresses everything the model WRITES   (skill, automatic)
-mini-mcp  →  changes WHAT gets read in the first place (5 tools)
-rules     →  governs judgment: when to ask, when to verify (2 new rules)
-```
+## Quick summary
 
-Headroom and Caveman are structural — they work whether or not the model
-"remembers" anything. mini-mcp's tools change what's available to call.
-The rules cover the two decisions no proxy can make for the model: **should
-I ask or should I explore**, and **does this fix need a browser check or
-not**. Both came directly from real, measured waste in production sessions.
+- Purpose: prevent agents from needlessly reading whole files, producing verbose prose, or taking expensive verification steps when not required.
+- Key idea: rules alone are fragile. Add structural layers (input/output compression) and small tools that change *what* the model can read and write.
+- Built-by: Shiva (shivtchandra) — indie dev.
 
-## Install everything in one command
+## What’s in the stack
+
+1. Headroom — input compression (reduce what the model reads)
+2. Caveman — output compression (reduce filler/hedging in model outputs)
+3. mini-mcp — five small MCP tools that control what the model can request
+4. Rules — 12 short rules (FRUGAL-RULES.md) that capture judgment decisions the model can't make automatically
+
+## mini-mcp tools
+
+- `repo_map` — a compact map of files + signatures used to orient without reading whole files (8K cap)
+- `read_range` — read a numbered line range: `start..end` (tight windows only)
+- `apply_patch` — provide exact old→new patches (uniqueness-checked) to avoid long rewrite outputs
+- `park_state` — append progress/notes to `.mini/notes-<task>.md`
+- `resume_state` — read parked state at session start
+
+These tools intentionally avoid large context reads and encourage precise, minimal changes.
+
+## Install (all-in-one)
+
+Requirements: Python 3.10+ (3.11 recommended), Claude Code CLI (or other MCP-capable client) already installed.
+
+Clone and run the installer to set up the full stack (Headroom, Caveman, mini-mcp, and rules):
 
 ```bash
 git clone https://github.com/shivtchandra/minicursor
@@ -29,134 +39,93 @@ cd minicursor
 bash install-full-stack.sh
 ```
 
-Installs Headroom, Caveman, mini-mcp, and appends the rules to
-`~/.claude/CLAUDE.md`. Safe to re-run. Requires Python 3.10+ and the
-Claude Code CLI already installed.
+The installer will:
+- Install Headroom and Caveman integrations (third-party projects)
+- Install mini-mcp and register the `mini` MCP server for your client
+- Append the FRUGAL rules block into `~/.claude/CLAUDE.md` (safe to re-run)
 
-### Or install layers individually
+### Layer-by-layer install (manual)
 
 ```bash
 # Headroom — input compression
 pip install headroom-ai && headroom mcp install
 
-# Caveman — output compression
+# Caveman — output compression (via Claude skill)
 claude skills add github:JuliusBrussee/caveman
 
-# mini-mcp — the tools
+# mini-mcp — the MCP tools served from this package
 python3.11 -m pip install git+https://github.com/shivtchandra/minicursor
 claude mcp add mini --scope user -- python3.11 -m mini_mcp
 
-# rules — paste FRUGAL-RULES.md's rule block into ~/.claude/CLAUDE.md
+# Rules — paste FRUGAL-RULES.md into ~/.claude/CLAUDE.md (or see file for details)
 ```
 
-## What each layer actually does
+## Quick usage examples
 
-| Layer | Fixes | Measured effect | Built by |
-|---|---|---|---|
-| Headroom | Input bloat — full files, logs, history | ~15-20% on coding agents, 60-95% on JSON | [chopratejas/headroom](https://github.com/chopratejas/headroom) |
-| Caveman | Output verbosity — filler, hedging | ~65% output tokens (small % of most bills) | [JuliusBrussee/caveman](https://github.com/JuliusBrussee/caveman) |
-| mini-mcp | What gets read at all | repo_map avoids whole-file reads entirely | this repo |
-| Rules | Judgment: ask vs explore, verify vs trust | qualitative — see below | this repo |
-
-## The 5 mini-mcp tools
-
-| Tool | What it does |
-|---|---|
-| `repo_map` | Files + signatures, 8K cap — orient without reading |
-| `read_range` | Lines start..end, numbered — tight windows only |
-| `apply_patch` | Exact old→new, uniqueness-checked — zero wasted output tokens |
-| `park_state` | Append progress to .mini/notes-<task>.md |
-| `resume_state` | Read parked state at session start |
-
-## The 12 rules (full text in FRUGAL-RULES.md)
+Inside Claude Code or any MCP-capable client, try:
 
 ```
-1-2   Orient cheap, patch don't rewrite
-3-3b  Gate don't narrate — and match the check to the stakes
-4-5   Big outputs to files, park state across sessions
-6-7   Stay on task, one pass per feedback round
-8-9   Images are expensive, errors go to files
-10    No prose summaries — the diff is the report
-11    ASK, DON'T EXPLORE — one question beats five tool calls
-      when the ambiguity is about intent, not location
-12    DON'T DEFAULT TO THE BROWSER — screenshot only when pixels
-      are the actual deliverable, not for every trivial fix
+what token economy rules are you following in this session?
+use repo_map to orient yourself in this project
 ```
 
-Rules 11 and 12 exist because of specific, named failures observed in real
-sessions: burning tool calls to guess what the user meant instead of
-asking, and reflexively screenshotting one-line CSS fixes. Full rationale
-in [FRUGAL-RULES.md](FRUGAL-RULES.md).
+Cursor example (`~/.cursor/mcp.json`):
 
-## Connect to your app
-
-### Claude Code
-```bash
-claude mcp add mini --scope user -- python3.11 -m mini_mcp
-```
-
-### Cursor
-`~/.cursor/mcp.json`:
 ```json
 { "mcpServers": { "mini": { "command": "python3.11", "args": ["-m", "mini_mcp"] } } }
 ```
 
-### Codex
-`~/.codex/config.toml`:
+Codex example (`~/.codex/config.toml`):
+
 ```toml
 [mcp_servers.mini]
 command = "python3.11"
 args = ["-m", "mini_mcp"]
 ```
 
-## Verify it's working
+## Why this design
 
-Inside Claude Code:
-```
-what token economy rules are you following in this session?
-use repo_map to orient yourself in this project
-```
+- Rules without structural constraints get ignored under heavy context pressure.
+- Headroom and Caveman enforce structural limits outside the model's memory.
+- mini-mcp changes the set of available actions so the model cannot accidentally read or write huge amounts of context.
+- Two judgment rules (ASK vs. EXPLORE, VERIFY vs. TRUST) remain because they are decisions a proxy cannot reliably make for the model.
 
-## How this was built
+Read the full rationale in FRUGAL-RULES.md.
 
-I built a full multi-agent orchestration system first — cost-routed model
-tiers, task boards, watchdog agents, cross-provider dispatch. It was
-elaborate. I ran it on a real task, burned my entire 5-hour Claude window,
-shipped nothing. One strong model with no orchestration shipped the same
-task the next day.
+## Limitations
 
-The rules-only version of mini came next — and a real session audit showed
-even a well-written rules file gets ignored under context pressure. So
-v0.3.0 stops relying on the model remembering anything: Headroom and
-Caveman enforce structurally, mini-mcp's tools change what's callable, and
-the two judgment rules that remain (11, 12) exist only because they came
-from real, named waste — not because I think rules work reliably. They
-don't, alone. This is what does.
+- Headroom and Caveman are third-party projects (MIT). They are not maintained in this repo.
+- `repo_map` is signature/regex-based, not a full symbol graph or LSP replacement — it’s for orientation.
+- The rules are textual and therefore subject to the same limits as any text-based guard.
 
-## Honest limitations
+## Changelog (high-level)
 
-- Headroom and Caveman are third-party projects — not built or maintained
-  here. Both are open source, MIT-licensed, install independently.
-- mini-mcp's `repo_map` is regex-based signature extraction, not a symbol
-  graph — good for orienting, not a replacement for an LSP.
-- Rules 11-12 are still text a model reads, same limitation as rules 1-10.
-  The difference is they're judgment calls with no structural fix possible
-  — Headroom can't decide when to ask a question for you.
+- v0.3.0 — Introduced the 4-layer stack (Headroom + Caveman), rules 11 and 12, one-command installer.
+- v0.2.0 — Added rules 8–10 (images, error dumps, prose summaries).
+- v0.1.0 — Initial release: 5 tools, 7 rules.
 
-## Changelog
+## Contributing
 
-**v0.3.0** — Added the 4-layer stack (Headroom + Caveman integration),
-rules 11 (decision speed) and 12 (verification proportionality) from real
-usage feedback, one-command full-stack installer.
-
-**v0.2.0** — Added rules 8-10 from session audit (images, error dumps,
-prose summaries).
-
-**v0.1.0** — Initial release. 5 tools, 7 rules.
+Contributions welcome. Open issues or PRs, or reach out via GitHub Discussions if you'd like to talk about design decisions.
 
 ## License
 
-MIT — take it, use it, improve it.
+MIT — see LICENSE file.
 
-Built by [Shiva](https://github.com/shivtchandra) — indie dev from Tamil
-Nadu, shipping mobile, web, and SaaS.
+---
+
+Suggested hashtags & GitHub topics
+
+Use these when sharing on social platforms (X/Twitter, LinkedIn) and as GitHub repo topics to improve discoverability.
+
+- Hashtags for posts: #AI #AIAgents #AgentTools #LLM #LLMTools #DeveloperTools #Productivity #CodeAI #PromptEngineering #OpenSource #Python
+
+- More focused tags (for audiences interested in cost or agent design): #TokenEconomy #MCP #Tooling #Efficiency #CostOptimization
+
+- GitHub topics you can add on the repo: ai-agents, mcp, tools, prompt-engineering, python, open-source, code-assistant
+
+Tips: use a short demo GIF showing the repo_map + apply_patch flow, and a 1–2 sentence TL;DR focusing on cost savings and fewer token-burned roundtrips.
+
+---
+
+Built by [Shiva](https://github.com/shivtchandra)
