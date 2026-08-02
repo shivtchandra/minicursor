@@ -1,5 +1,7 @@
 # mini — a 4-layer token-economy stack for AI coding agents
 
+![Python](https://img.shields.io/badge/Python-3.10+-3776AB?logo=python&logoColor=white) ![MCP](https://img.shields.io/badge/MCP-server-black) ![License](https://img.shields.io/badge/License-MIT-green)
+
 > Tooling + rules to remove waste in agent coding sessions: input bloat, noisy output, unnecessary reads, and reflex verification.
 
 mini is a compact stack that combines structural proxies, compression, a small set of MCP tools, and a short, pragmatic ruleset that together reduce cost and noise when models interact with codebases.
