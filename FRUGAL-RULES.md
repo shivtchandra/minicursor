@@ -1,30 +1,45 @@
 # FRUGAL RULES — one doctrine, every app
-# mini v0.3.0 — 4-layer stack: enforcement, not suggestion
+# mini v0.3.1 — 5-layer stack: enforcement, not suggestion
 
 Rules alone are passive text — a real session audit proved the model reads
 whole files and screenshots trivially despite being told not to. v0.3.0
-stops asking nicely and adds infrastructure that makes waste structurally
-harder, plus two new behavioral rules on DECISION SPEED and VERIFICATION
-PROPORTIONALITY that came directly from user feedback on real usage.
+added infrastructure plus two behavioral rules on DECISION SPEED and
+VERIFICATION PROPORTIONALITY. v0.3.1 fixed the enforcement layer itself: it
+existed only as an untracked file with a bypassable check (a tool merely
+being *listed* as available satisfied it, whether or not the model ever
+called it) — now tracked in this repo, checked against real tool-call
+evidence, and actually wired in by the installer.
 
-## The 4 layers (this is the full stack now)
+## The 5 layers (this is the full stack now)
 
 ```
 Headroom  → compresses everything the model READS (proxy-level, automatic)
 Caveman   → compresses everything the model WRITES (skill-level, automatic)
 mini-mcp  → changes WHAT gets read in the first place (repo_map, read_range,
             apply_patch, park_state, resume_state)
+GATE      → PreToolUse hook (hooks/mini-gate.py) that technically BLOCKS
+            Read until repo_map has genuinely been called, and Edit until
+            apply_patch has genuinely failed twice in a row on that exact
+            file — checked against real tool_use/tool_result blocks in the
+            session transcript, not text the tool's own name happens to
+            appear near
 RULES     → governs BEHAVIOR: when to ask vs explore, when to verify vs trust
 ```
 
 Headroom and Caveman are infrastructure — once installed they work whether
 or not the model "remembers" a rule. mini-mcp tools change the shape of
-what's available to call. The rules below govern judgment calls no proxy
-can make for the model: when to stop and ask, when a check is worth its cost.
+what's available to call. The gate is the only layer that can actually stop
+a tool call rather than hope the model self-polices — everything else here
+depends, one way or another, on the model choosing to comply. The rules
+below govern judgment calls no proxy can make for the model: when to stop
+and ask, when a check is worth its cost.
 
 ---
 
-## Install all 4 layers
+## Install all 5 layers
+
+Easiest: run `install-full-stack.sh` from this repo — it does all 5 steps
+below, checks before acting on each, and is safe to re-run.
 
 ```bash
 # 1. Headroom — input compression (proxy + MCP)
@@ -39,6 +54,14 @@ python3.11 -m pip install git+https://github.com/shivtchandra/minicursor
 claude mcp add mini --scope user -- python3.11 -m mini_mcp
 
 # 4. These rules — paste the block below into ~/.claude/CLAUDE.md
+
+# 5. The enforcement gate — copy the hook and wire it into settings.json
+mkdir -p ~/.claude/hooks
+cp hooks/mini-gate.py ~/.claude/hooks/mini-gate.py
+# then merge into ~/.claude/settings.json (nested under "hooks"):
+#   { "hooks": { "PreToolUse": [ { "matcher": "Read|Edit|Agent",
+#     "hooks": [ { "type": "command",
+#       "command": "python3 ~/.claude/hooks/mini-gate.py" } ] } ] } }
 ```
 
 ---
@@ -49,14 +72,21 @@ claude mcp add mini --scope user -- python3.11 -m mini_mcp
 TOKEN ECONOMY RULES (non-negotiable):
 
 CONTEXT
-1. ORIENT CHEAP. Call repo_map or run `ls`/`find` first. Then grep to locate
-   the exact file and line. Never read a whole file to orient — read a tight
-   line range around the match; widen only if genuinely needed.
+1. ORIENT CHEAP — MANDATORY TOOL, NOT A SUGGESTION. On ANY task touching an
+   existing codebase, call mcp__mini__repo_map FIRST — before Read, Grep,
+   ls, find, or an Explore/general-purpose agent. This applies even to
+   tasks that feel small or research-only. Only after repo_map fails to
+   answer the question do you grep, and only after grep locates the line
+   do you read a tight range with mcp__mini__read_range. Never read a
+   whole file to orient. "It's just a quick lookup" is not an exception.
 
 EDITING
-2. PATCH, DON'T REWRITE. Edits are minimal exact replacements (apply_patch /
-   Edit tool). Never re-emit an entire existing file. New files only when the
-   file is actually new. If a rewrite touches >80% of a file, flag it first.
+2. PATCH, DON'T REWRITE — MANDATORY TOOL, NOT A SUGGESTION. Use
+   mcp__mini__apply_patch for every edit to an existing file. Do not use
+   the native Edit tool unless apply_patch fails twice in a row on the
+   same file (ambiguous match, etc.) — then say so before falling back.
+   Never re-emit an entire existing file. New files only when the file is
+   actually new. If a rewrite touches >80% of a file, flag it first.
 
 VERIFICATION — PROPORTIONAL, NOT REFLEXIVE
 3. GATE, DON'T NARRATE. Verify with real checks (build, tests, lint, or
@@ -128,6 +158,15 @@ VERIFICATION SPEED  ← new
     back, confirm it matches intent, done. This rule exists because
     reflexive browser-checking on every trivial change was measured as a
     real, repeated waste in production use.
+
+DEFAULT, NOT OPT-IN  ← new
+13. THESE RULES ARE ACTIVE ON EVERY SESSION AND EVERY TASK, NOT ONLY WHEN
+    THE USER SAYS "use mini" / "use the rules" / names the stack. If mini's
+    MCP tools (repo_map, read_range, apply_patch, park_state, resume_state)
+    are present in this session's tool list, rules 1 and 2 are mandatory
+    from message one — silently, without announcing it. A user having to
+    ask for the frugal stack on a given turn is itself a rule violation on
+    the PRIOR turn.
 ```
 
 ---
@@ -168,6 +207,31 @@ Paste rules into `AGENTS.md`.
 | `park_state` | Append progress to .mini/notes-<task>.md |
 | `resume_state` | Read parked state at session start |
 
+## The enforcement gate (`hooks/mini-gate.py`)
+
+A Claude Code `PreToolUse` hook, matched on `Read|Edit|Agent`:
+
+- **Read** is blocked until `mcp__mini__repo_map` has a genuine `tool_use`
+  entry in the session transcript this turn — not just a mention of the
+  tool's name (system-reminders list every available tool by name; that
+  used to be enough to satisfy a naive text search, which is the bug fixed
+  in v0.3.1).
+- **Edit** is blocked on a given file until `mcp__mini__apply_patch` has
+  actually failed twice in a row *on that exact file* (checked via the
+  matching `tool_result` blocks' `is_error` flag) — one failure gets told
+  to retry, zero attempts gets told to try apply_patch first, and a file
+  whose most recent apply_patch succeeded stays on apply_patch rather than
+  silently falling back to Edit.
+- **Agent** spawns of read-heavy subagent types (`Explore`, `Plan`,
+  `general-purpose`, `claude`, `worker-core`, `worker-lite`, `worker-max`)
+  are blocked unless the spawn prompt itself instructs the subagent to use
+  `mcp__mini__read_range` — subagents get their own transcript, so this is
+  the only point where the parent session can enforce Rule 1 onto them.
+
+This is the layer that makes rules 1 and 2 *mandatory* rather than
+best-effort: exit 2 with a stderr reason blocks the tool call outright and
+feeds the reason back to the model, rather than hoping it remembers.
+
 ## What Headroom and Caveman add (not built by this project — pair with it)
 
 - **Headroom** ([chopratejas/headroom](https://github.com/chopratejas/headroom)):
@@ -186,7 +250,14 @@ Paste rules into `AGENTS.md`.
 Rules 1–10 describe good behavior. A model can and sometimes will ignore
 them under context pressure — that's why layers 1–3 (Headroom, Caveman,
 mini-mcp) exist as structural backstops that don't depend on the model
-remembering anything. Rules 11 and 12 are different: they're judgment calls
-(when to ask, when to verify) that no proxy can make on the model's behalf,
-so they stay as rules — but they're written from a real audit of where a
+remembering anything, and why the gate exists on top of rules 1/2
+specifically: a real audit found a model correctly *stating* it was
+following rules 1/2 while its actual tool calls did not, because the
+enforcement check at the time only searched for the tool's name anywhere in
+transcript text — satisfied by the tool merely being listed as available,
+not by it being called. The gate now checks genuine tool_use/tool_result
+evidence instead, so compliance is verifiable from the transcript, not
+self-reported. Rules 11 and 12 are different: they're judgment calls (when
+to ask, when to verify) that no proxy can make on the model's behalf, so
+they stay as rules — but they're written from a real audit of where a
 session wasted time and tokens, not as theory.

@@ -8,8 +8,9 @@ from mcp.server.fastmcp import FastMCP
 
 mcp = FastMCP("mini")
 
-SKIP_DIRS = {".git", "node_modules", ".venv", "venv", "__pycache__", "dist",
-             "build", ".next", ".mini", "target", ".idea", ".vscode"}
+SKIP_DIRS = {"node_modules", "venv", "dist", "build", "target",
+             "Pods", "DerivedData", "Carthage", ".symlinks",
+             "GeneratedPluginRegistrant"}
 SIG_RE = {
     ".py": re.compile(r"^\s*(?:class|def)\s+\w+.*?:", re.M),
     ".js": re.compile(r"^\s*(?:export\s+)?(?:async\s+)?(?:function\s+\w+|class\s+\w+|const\s+\w+\s*=\s*(?:async\s*)?\()", re.M),
@@ -31,7 +32,9 @@ def repo_map(root: str = ".") -> str:
     rootp = Path(root).resolve()
     lines, total = [], 0
     for p in sorted(rootp.rglob("*")):
-        if any(part in SKIP_DIRS for part in p.parts) or not p.is_file():
+        rel_parts = p.relative_to(rootp).parts
+        if any(part in SKIP_DIRS or part.startswith(".") for part in rel_parts[:-1]) \
+                or not p.is_file():
             continue
         try:
             if p.stat().st_size > 400_000:

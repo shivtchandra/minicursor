@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "mini-mcp"
-version = "0.3.0"
+version = "0.3.1"
 description = "Token-frugal MCP tools for Claude Code, Cursor, and Codex — repo map, ranged reads, surgical patching, session parking."
 readme = "README.md"
 license = { text = "MIT" }

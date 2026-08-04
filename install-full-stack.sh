@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
-# install-full-stack.sh — installs all 4 layers of the mini token-economy
+# install-full-stack.sh — installs all 5 layers of the mini token-economy
 # stack: Headroom (input compression), Caveman (output compression),
-# mini-mcp (tools), and the FRUGAL-RULES (behavior).
+# mini-mcp (tools), the FRUGAL-RULES (behavior), and the enforcement gate
+# (a PreToolUse hook that actually blocks non-compliant tool calls).
 #
 # Safe to re-run — every step checks before acting.
 set -uo pipefail
@@ -12,8 +13,8 @@ ok()   { echo -e "${GREEN}✔${NC} $1"; }
 warn() { echo -e "${YELLOW}○${NC} $1"; }
 step() { echo -e "\n${BOLD}$1${NC}"; }
 
-echo -e "${BOLD}mini — full 4-layer token economy stack${NC}"
-echo -e "${DIM}Headroom (reads) + Caveman (writes) + mini-mcp (tools) + rules (behavior)${NC}"
+echo -e "${BOLD}mini — full 5-layer token economy stack${NC}"
+echo -e "${DIM}Headroom (reads) + Caveman (writes) + mini-mcp (tools) + rules (behavior) + gate (enforcement)${NC}"
 
 # --- pre-flight -----------------------------------------------------------
 # Find first python >= 3.10. Honor PYTHON_BIN override if set.
@@ -40,7 +41,7 @@ fi
 ok "Claude Code CLI found"
 
 # --- layer 1: headroom ------------------------------------------------------
-step "1/4 Headroom (input compression)"
+step "1/5 Headroom (input compression)"
 if $PY -c "import headroom" 2>/dev/null; then
   ok "already installed"
 else
@@ -69,7 +70,7 @@ else
 fi
 
 # --- layer 2: caveman --------------------------------------------------------
-step "2/4 Caveman (output compression)"
+step "2/5 Caveman (output compression)"
 if claude skills list 2>/dev/null | grep -qi caveman; then
   ok "already installed"
 else
@@ -79,7 +80,7 @@ else
 fi
 
 # --- layer 3: mini-mcp --------------------------------------------------------
-step "3/4 mini-mcp (frugal tools)"
+step "3/5 mini-mcp (frugal tools)"
 $PY -m pip install --user -q "git+https://github.com/shivtchandra/minicursor" \
   && ok "installed" || { echo "pip install failed"; exit 1; }
 
@@ -92,7 +93,7 @@ else
 fi
 
 # --- layer 4: rules --------------------------------------------------------
-step "4/4 FRUGAL-RULES (behavior)"
+step "4/5 FRUGAL-RULES (behavior)"
 HERE="$(cd "$(dirname "$0")" && pwd)"
 RULES_FILE="$HERE/FRUGAL-RULES.md"
 CLAUDE_MD="$HOME/.claude/CLAUDE.md"
@@ -120,10 +121,66 @@ fi
 } >> "$CLAUDE_MD"
 ok "rules appended to $CLAUDE_MD"
 
+# --- layer 5: enforcement gate ---------------------------------------------
+# Rules 1-4 are prose — a model can and does ignore prose under context
+# pressure. This is the technical backstop: a PreToolUse hook that blocks
+# Read (until repo_map has genuinely been called this session) and Edit
+# (until apply_patch has genuinely failed twice in a row on that exact
+# file), checked against real tool_use/tool_result blocks in the session
+# transcript — not a text search that a tool merely being *mentioned*
+# anywhere (e.g. in a system-reminder listing available tools) can satisfy.
+step "5/5 Enforcement gate (PreToolUse hook)"
+mkdir -p "$HOME/.claude/hooks"
+cp "$HERE/hooks/mini-gate.py" "$HOME/.claude/hooks/mini-gate.py" \
+  && ok "hook installed to ~/.claude/hooks/mini-gate.py" \
+  || warn "copy failed — copy $HERE/hooks/mini-gate.py to ~/.claude/hooks/ manually"
+
+SETTINGS_JSON="$HOME/.claude/settings.json"
+HOOK_CMD="python3 $HOME/.claude/hooks/mini-gate.py"
+SETTINGS_JSON="$SETTINGS_JSON" HOOK_CMD="$HOOK_CMD" "$PY" - <<'PYEOF'
+import json
+import os
+
+path = os.environ["SETTINGS_JSON"]
+hook_cmd = os.environ["HOOK_CMD"]
+
+try:
+    with open(path) as f:
+        data = json.load(f)
+except (FileNotFoundError, json.JSONDecodeError):
+    data = {}
+
+# Real schema nests PreToolUse under "hooks", not at the settings root —
+# verified by inspecting a live settings.json rather than assumed.
+pre = data.setdefault("hooks", {}).setdefault("PreToolUse", [])
+already_wired = any(
+    "mini-gate.py" in h.get("command", "")
+    for entry in pre
+    for h in entry.get("hooks", [])
+)
+if not already_wired:
+    pre.append({
+        "matcher": "Read|Edit|Agent",
+        "hooks": [{"type": "command", "command": hook_cmd}],
+    })
+    with open(path, "w") as f:
+        json.dump(data, f, indent=2)
+    print("wired")
+else:
+    print("already wired")
+PYEOF
+if [ $? -eq 0 ]; then
+  ok "PreToolUse hook registered in $SETTINGS_JSON"
+else
+  warn "settings.json merge failed — add this yourself:"
+  echo '  { "PreToolUse": [ { "matcher": "Read|Edit|Agent", "hooks": [ { "type": "command", "command": "'"$HOOK_CMD"'" } ] } ] }'
+fi
+
 # --- verify -----------------------------------------------------------------
 step "Done. Verify inside Claude Code:"
 echo '  "what token economy rules are you following in this session?"'
 echo '  "use repo_map to orient yourself in this project"'
+echo '  "edit a file with the native Edit tool without trying apply_patch first" (should be blocked)'
 echo ""
-echo "Layers installed: Headroom + Caveman + mini-mcp + rules."
+echo "Layers installed: Headroom + Caveman + mini-mcp + rules + enforcement gate."
 echo "Any step marked ○ above needs a manual follow-up — copy the command shown."
